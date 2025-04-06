@@ -5,8 +5,10 @@ import logging
 import logging.handlers
 import os
 import sys
-from datetime import date, datetime # Import date and datetime
+from datetime import date, datetime, timezone # Import date, datetime, timezone
 import json # Import json for usage tracking
+import time
+import uuid # For generating OpenAI response IDs
 
 # --- Configuration ---
 # Placeholder token that clients will use in the 'x-goog-api-key' header
@@ -66,7 +68,7 @@ def setup_logging():
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(log_formatter)
     # Console handler might have a different level (e.g., INFO) if desired
-    console_handler.setLevel(logging.INFO) 
+    console_handler.setLevel(logging.INFO)
 
     # Get the root logger and add handlers
     root_logger = logging.getLogger()
@@ -84,19 +86,19 @@ def load_usage_data(filename=USAGE_DATA_FILE):
     global key_usage_counts, current_usage_date, exhausted_keys_today
     today_str = date.today().isoformat()
     current_usage_date = date.today() # Ensure current_usage_date is set
-    
+
     script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
     filepath = os.path.join(script_dir, filename)
     logging.info(f"Attempting to load usage data for {today_str} from: {filepath}")
-    
+
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         if data.get("date") == today_str:
             key_usage_counts = data.get("counts", {})
             # Load exhausted keys as a set
-            exhausted_keys_today = set(data.get("exhausted_keys", [])) 
+            exhausted_keys_today = set(data.get("exhausted_keys", []))
             logging.info(f"Successfully loaded usage data for {today_str}.")
             logging.info(f"  Counts: {key_usage_counts}")
             logging.info(f"  Exhausted keys today: {exhausted_keys_today}")
@@ -104,7 +106,7 @@ def load_usage_data(filename=USAGE_DATA_FILE):
             logging.info(f"Usage data in {filepath} is for a previous date ({data.get('date')}). Starting fresh counts and exhausted list for {today_str}.")
             key_usage_counts = {} # Reset counts
             exhausted_keys_today = set() # Reset exhausted keys
-            
+
     except FileNotFoundError:
         logging.info(f"Usage data file not found: {filepath}. Starting with empty counts and exhausted list.")
         key_usage_counts = {}
@@ -127,10 +129,10 @@ def save_usage_data(filename=USAGE_DATA_FILE):
         "counts": key_usage_counts,
         "exhausted_keys": list(exhausted_keys_today) # Convert set to list for JSON
     }
-    
+
     script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
     filepath = os.path.join(script_dir, filename)
-    
+
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, indent=4)
@@ -150,13 +152,13 @@ def load_api_keys(filename):
     # Construct the full path relative to the script's directory or CWD
     script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
     filepath = os.path.join(script_dir, filename)
-    
+
     logging.info(f"Attempting to load API keys from: {filepath}")
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             # Read non-empty lines and strip whitespace
-            keys = [line.strip() for line in f if line.strip()] 
-        
+            keys = [line.strip() for line in f if line.strip()]
+
         if not keys:
             logging.error(f"No API keys found in {filepath}. File might be empty or contain only whitespace.")
             return None
@@ -167,7 +169,7 @@ def load_api_keys(filename):
                  logging.debug(f"  Key {i+1}: ...{key[-4:]}")
             all_api_keys = keys # Store the loaded keys globally
             return keys
-            
+
     except FileNotFoundError:
         logging.error(f"API key file not found: {filepath}")
         return None
@@ -176,18 +178,110 @@ def load_api_keys(filename):
         logging.error(f"An error occurred while loading API keys from {filepath}: {e}", exc_info=True)
         return None
 
+# --- Helper Functions ---
+
+def is_openai_chat_request(path):
+    """Checks if the request path matches the OpenAI chat completions endpoint."""
+    return path.strip('/') == "v1/chat/completions"
+
+def convert_openai_to_gemini_request(openai_data):
+    """Converts OpenAI request JSON to Gemini request JSON."""
+    gemini_request = {"contents": [], "generationConfig": {}, "safetySettings": []}
+    target_model = "gemini-pro" # Default model, can be overridden
+
+    # --- Model Mapping (Simple: Use OpenAI model name directly for now) ---
+    # A more robust solution might involve explicit mapping or configuration
+    if "model" in openai_data:
+        # Assuming the model name provided is Gemini-compatible
+        # Remove potential prefix like "openai/" if present
+        target_model = openai_data["model"].split('/')[-1]
+        logging.debug(f"Using model from OpenAI request: {target_model}")
+        # We won't put the model in the Gemini request body, it's part of the URL
+
+    # --- Message Conversion ---
+    system_prompt = None
+    gemini_contents = []
+    for message in openai_data.get("messages", []):
+        role = message.get("role")
+        content = message.get("content")
+
+        if not content: # Skip messages without content
+             continue
+
+        # Handle system prompt separately
+        if role == "system":
+            if isinstance(content, str):
+                 system_prompt = {"role": "system", "parts": [{"text": content}]}
+            # Note: Gemini API might prefer system prompt at the start or via specific field
+            continue # Don't add system prompt directly to contents here
+
+        # Map roles
+        gemini_role = "user" if role == "user" else "model" # Treat 'assistant' as 'model'
+
+        # Ensure content is in the correct parts format
+        if isinstance(content, str):
+            gemini_contents.append({"role": gemini_role, "parts": [{"text": content}]})
+        # TODO: Handle more complex content types if needed (e.g., images)
+
+    # Add system prompt if found (Gemini prefers it at the start or via systemInstruction)
+    # Let's try adding it via systemInstruction if present
+    if system_prompt:
+         gemini_request["systemInstruction"] = system_prompt
+         # Alternatively, prepend to contents: gemini_contents.insert(0, system_prompt)
+
+    gemini_request["contents"] = gemini_contents
+
+
+    # --- Generation Config Mapping ---
+    if "temperature" in openai_data:
+        gemini_request["generationConfig"]["temperature"] = openai_data["temperature"]
+    if "max_tokens" in openai_data:
+        gemini_request["generationConfig"]["maxOutputTokens"] = openai_data["max_tokens"]
+    if "stop" in openai_data:
+        # Gemini expects `stopSequences` which is an array of strings
+        stop_sequences = openai_data["stop"]
+        if isinstance(stop_sequences, str):
+            gemini_request["generationConfig"]["stopSequences"] = [stop_sequences]
+        elif isinstance(stop_sequences, list):
+            gemini_request["generationConfig"]["stopSequences"] = stop_sequences
+    # Add other mappings as needed (topP, topK etc.)
+    if "top_p" in openai_data:
+         gemini_request["generationConfig"]["topP"] = openai_data["top_p"]
+    # if "top_k" in openai_data: gemini_request["generationConfig"]["topK"] = openai_data["top_k"] # Map if needed
+
+    # --- Safety Settings (Optional: Default to BLOCK_NONE for compatibility) ---
+    # You might want to make this configurable or map from OpenAI safety params if they existed
+    gemini_request["safetySettings"] = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    # --- Streaming ---
+    # The actual Gemini endpoint URL will determine streaming, not a body parameter
+    is_streaming = openai_data.get("stream", False)
+
+    return gemini_request, target_model, is_streaming
+
 # --- Flask Application ---
 app = Flask(__name__)
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 def proxy(path):
     """
-    Handles incoming requests, validates placeholder token, selects an available API key 
-    (skipping exhausted ones), tracks usage, handles 429 errors by marking keys 
-    as exhausted for the day, forwards the request, and returns the response.
+    Handles incoming requests, validates placeholder token, selects an available API key
+    (skipping exhausted ones), tracks usage, handles 429 errors by marking keys
+    as exhausted for the day, forwards the request (potentially converting formats),
+    and returns the response (potentially converting formats).
     """
     global key_cycler, key_usage_counts, current_usage_date, exhausted_keys_today, all_api_keys
-    
+
+    request_start_time = time.time()
+    original_request_path = path
+    is_openai_format = is_openai_chat_request(original_request_path)
+    logging.info(f"Request received for path: {original_request_path}. OpenAI format detected: {is_openai_format}")
+
     # --- Daily Usage Reset Check ---
     today = date.today()
     if today != current_usage_date:
@@ -202,10 +296,51 @@ def proxy(path):
         logging.error("API keys not loaded or cycler not initialized. Cannot process request.")
         return Response("Proxy server error: API keys not loaded.", status=503, mimetype='text/plain') # Service Unavailable
 
+    # --- Request Body Handling & Potential Conversion ---
+    request_data_bytes = request.get_data()
+    gemini_request_body_json = None
+    target_gemini_model = None
+    use_stream_endpoint = False
+    target_path = path # Default to original path
+
+    if is_openai_format:
+        if request.method != 'POST':
+             return Response("OpenAI compatible endpoint only supports POST.", status=405, mimetype='text/plain')
+        try:
+            openai_request_data = json.loads(request_data_bytes)
+            logging.debug(f"Original OpenAI request data: {openai_request_data}")
+            gemini_request_body_json, target_gemini_model, use_stream_endpoint = convert_openai_to_gemini_request(openai_request_data)
+            logging.debug(f"Converted Gemini request data: {gemini_request_body_json}")
+            logging.info(f"OpenAI request mapped to Gemini model: {target_gemini_model}, Streaming: {use_stream_endpoint}")
+
+            # Determine target Gemini endpoint
+            action = "streamGenerateContent" if use_stream_endpoint else "generateContent"
+            # Construct the Gemini API path using the extracted/defaulted model
+            target_path = f"v1beta/models/{target_gemini_model}:{action}"
+
+        except json.JSONDecodeError:
+            logging.error("Failed to decode OpenAI request body as JSON.")
+            return Response("Invalid JSON in request body.", status=400, mimetype='text/plain')
+        except Exception as e:
+            logging.error(f"Error during OpenAI request conversion: {e}", exc_info=True)
+            return Response("Error processing OpenAI request.", status=500, mimetype='text/plain')
+    else:
+        # Assume it's a direct Gemini request, pass body through (if method allows)
+        if request_data_bytes and request.method in ['POST', 'PUT', 'PATCH']:
+             # We don't strictly need to parse it here, but might be useful for logging
+             try:
+                  gemini_request_body_json = json.loads(request_data_bytes)
+                  logging.debug(f"Direct Gemini request data: {gemini_request_body_json}")
+             except json.JSONDecodeError:
+                  logging.warning("Could not parse direct Gemini request body as JSON for logging.")
+                  # Send bytes directly if not JSON? Or assume JSON? Let's assume JSON for now.
+                  # If non-JSON needed, this needs adjustment.
+        target_path = path # Use original path for direct Gemini requests
+
+
     # Construct the target URL for the actual Google API
-    target_url = f"{GEMINI_API_BASE_URL}/{path}"
-    logging.debug(f"Incoming request for path: {path}")
-    logging.debug(f"Target URL: {target_url}")
+    target_url = f"{GEMINI_API_BASE_URL}/{target_path}"
+    logging.debug(f"Target Gemini URL: {target_url}")
 
     # Get query parameters (passed through but not used for key auth)
     query_params = request.args.to_dict()
@@ -216,28 +351,52 @@ def proxy(path):
     # Use lowercase keys for case-insensitive lookup
     incoming_headers = {key.lower(): value for key, value in request.headers.items() if key.lower() != 'host'}
     logging.debug(f"Incoming headers (excluding Host): {incoming_headers}")
-    
-    # Start with a copy of incoming headers for the outgoing request
-    outgoing_headers = incoming_headers.copy() 
 
-    api_key_header = 'x-goog-api-key' # Standard header for Google API keys
+    # Start with a copy of incoming headers for the outgoing request
+    outgoing_headers = incoming_headers.copy()
+    auth_header_openai = 'authorization' # Define variable *before* use
+
+    # If the original request was OpenAI format, remove the Authorization header
+    # as we will use x-goog-api-key for the upstream request.
+    if is_openai_format and auth_header_openai in outgoing_headers:
+        del outgoing_headers[auth_header_openai]
+        logging.debug(f"Removed '{auth_header_openai}' header before forwarding.")
+
+    api_key_header_gemini = 'x-goog-api-key'
+    # auth_header_openai = 'authorization' # Definition moved up
     next_key = None
 
-    # --- API Key Validation and Rotation ---
-    if api_key_header not in incoming_headers:
-        logging.warning(f"Request rejected: Missing '{api_key_header}' header.")
-        return Response(f"Missing '{api_key_header}' header", status=400, mimetype='text/plain')
-    
-    if incoming_headers[api_key_header] != PLACEHOLDER_TOKEN:
-        logging.warning(f"Request rejected: Invalid API key provided in header. Expected placeholder.")
-        # Optionally log the received key if needed for debugging, but be careful with sensitive data
-        # logging.debug(f"Received non-placeholder key: {incoming_headers[api_key_header]}")
-        return Response(f"Invalid API key provided in header. Use the placeholder token '{PLACEHOLDER_TOKEN}'.", status=401, mimetype='text/plain') # Unauthorized
+    # --- API Key Validation (Handles both OpenAI and Gemini style auth to the proxy) ---
+    placeholder_token_provided = None
+    if is_openai_format:
+        # Expect OpenAI style "Authorization: Bearer PLACEHOLDER_TOKEN"
+        auth_value = incoming_headers.get(auth_header_openai)
+        if not auth_value:
+            logging.warning(f"OpenAI Request rejected: Missing '{auth_header_openai}' header.")
+            return Response(f"Missing '{auth_header_openai}' header", status=401, mimetype='text/plain')
+        parts = auth_value.split()
+        if len(parts) != 2 or parts[0].lower() != 'bearer':
+            logging.warning(f"OpenAI Request rejected: Invalid '{auth_header_openai}' header format. Expected 'Bearer <token>'.")
+            return Response(f"Invalid '{auth_header_openai}' header format.", status=401, mimetype='text/plain')
+        placeholder_token_provided = parts[1]
+    else:
+        # Expect Gemini style "x-goog-api-key: PLACEHOLDER_TOKEN"
+        if api_key_header_gemini not in incoming_headers:
+            logging.warning(f"Gemini Request rejected: Missing '{api_key_header_gemini}' header.")
+            return Response(f"Missing '{api_key_header_gemini}' header", status=400, mimetype='text/plain') # Bad Request might be more appropriate
+        placeholder_token_provided = incoming_headers[api_key_header_gemini]
 
-    # --- Key Selection and Request Loop ---
+    # Validate the provided token against the configured placeholder
+    if placeholder_token_provided != PLACEHOLDER_TOKEN:
+        logging.warning(f"Request rejected: Invalid placeholder token provided. Received: '{placeholder_token_provided}', Expected: '{PLACEHOLDER_TOKEN}'")
+        return Response(f"Invalid API key/token provided.", status=401, mimetype='text/plain') # Unauthorized
+
+    logging.debug("Placeholder token validated successfully.")
+
+    # --- Key Selection and Request Loop (Selects actual Gemini key for upstream) ---
     max_retries = len(all_api_keys) # Max attempts = number of keys
     keys_tried_this_request = 0
-    
+
     # Check if all keys are already exhausted before starting the loop
     if len(exhausted_keys_today) >= len(all_api_keys):
             logging.warning("All API keys are marked as exhausted for today. Rejecting request.")
@@ -254,31 +413,38 @@ def proxy(path):
                 continue # Try the next key in the cycle
 
             logging.info(f"Attempting request with key ending ...{next_key[-4:]}")
-            outgoing_headers[api_key_header] = next_key # Set the key for this attempt
+            outgoing_headers[api_key_header_gemini] = next_key # Set the actual Gemini key for the upstream request
 
             # --- Request Forwarding ---
-            data = request.get_data() # Get data inside loop in case of retry? No, data is static for the request. Get it once before loop.
-            # Get the request body data (moved outside loop)
-            # data = request.get_data() 
-            logging.debug(f"Request body size: {len(data)} bytes")
-            if LOG_LEVEL == logging.DEBUG and data:
-                 try:
-                      logging.debug(f"Request body: {data.decode('utf-8', errors='ignore')}")
-                 except Exception:
-                      logging.debug("Could not decode request body for logging.")
+            # Use the potentially converted JSON body
+            request_body_to_send = json.dumps(gemini_request_body_json).encode('utf-8') if gemini_request_body_json else b''
 
-            logging.info(f"Forwarding {request.method} request to: {target_url} with key ...{next_key[-4:]}")
+            logging.debug(f"Forwarding request body size: {len(request_body_to_send)} bytes")
+            if LOG_LEVEL == logging.DEBUG and request_body_to_send:
+                 try:
+                      logging.debug(f"Forwarding request body: {request_body_to_send.decode('utf-8', errors='ignore')}")
+                 except Exception:
+                      logging.debug("Could not decode forwarding request body for logging.")
+
+            # Determine method - OpenAI endpoint is always POST
+            forward_method = 'POST' if is_openai_format else request.method
+            logging.info(f"Forwarding {forward_method} request to: {target_url} with key ...{next_key[-4:]}")
             logging.debug(f"Forwarding with Query Params: {query_params}")
             logging.debug(f"Forwarding with Headers: {outgoing_headers}")
 
             # Make the request to the actual Google Gemini API
+            # Pass query params only if it wasn't an OpenAI request (OpenAI params are in body)
+            forward_params = query_params if not is_openai_format else None
+            # Determine if the *forwarded* request should be streaming based on Gemini endpoint
+            forward_stream = target_path.endswith("streamGenerateContent")
+
             resp = requests.request(
-                method=request.method,
+                method=forward_method,
                 url=target_url,
                 headers=outgoing_headers,
-                params=query_params,
-                data=data,
-                stream=True,
+                params=forward_params,
+                data=request_body_to_send,
+                stream=forward_stream, # Use stream based on Gemini target path
                 timeout=120
             )
 
@@ -295,7 +461,7 @@ def proxy(path):
                     logging.warning("All API keys are now exhausted after 429 error. Rejecting request.")
                     # Return the 429 response from the last failed key? Or a generic 503? Let's return 503.
                     return Response("All available API keys have reached their daily limit.", status=503, mimetype='text/plain')
-                
+
                 continue # Continue the loop to try the next available key
 
             # --- Success or Other Error ---
@@ -314,12 +480,18 @@ def proxy(path):
             ]
             logging.debug(f"Forwarding response headers to client: {response_headers}")
 
-            # Read the raw content first
-            raw_response_content = resp.content
-            filtered_content = raw_response_content # Default to original content
+            # --- Response Handling & Potential Conversion ---
 
-            # --- Attempt to filter out trailing Google API error JSON (Revised Approach) ---
-            if resp.status_code == 200 and raw_response_content:
+            final_headers_to_client = response_headers
+            final_status_code = resp.status_code
+
+            # --- Handle Non-Streaming and Direct Gemini Requests / Read Content ---
+            # Read the raw content for all non-streaming cases or direct Gemini requests
+            raw_response_content = resp.content
+            final_content_to_client = raw_response_content # Default
+
+            # --- Filter out trailing Google API error JSON (if applicable and status was 200) ---
+            if final_status_code == 200 and raw_response_content:
                 try:
                     # Decode the whole content
                     decoded_content = raw_response_content.decode('utf-8', errors='replace').strip()
@@ -341,17 +513,11 @@ def proxy(path):
                                     logging.warning(f"Detected and filtering out trailing Google API error JSON: {potential_error_json_str}")
                                     # Truncate the content *before* the start of this detected error block
                                     valid_content = decoded_content[:last_block_start].strip()
-                                    # Add back trailing newline(s) if content existed before the error
+                                    # Add back trailing newline(s) for SSE format consistency
                                     if valid_content:
-                                         # Preserve double newline if it was there before the error block
-                                         if decoded_content[last_block_start-1:last_block_start+1] == '\n\n{':
-                                              valid_content += '\n\n'
-                                         else:
-                                              valid_content += '\n' # Add single newline otherwise? Or maybe none? Let's stick with double for SSE consistency if possible. Add double.
-                                         valid_content += '\n\n'
+                                         valid_content += '\n\n' # Add double newline typical for SSE
 
-
-                                    filtered_content = valid_content.encode('utf-8')
+                                    raw_response_content = valid_content.encode('utf-8') # Update raw_response_content
                                 else:
                                     logging.debug("Potential JSON at end doesn't match Google error structure.")
                             except json.JSONDecodeError:
@@ -363,25 +529,154 @@ def proxy(path):
 
                 except Exception as filter_err:
                     logging.error(f"Error occurred during revised response filtering: {filter_err}", exc_info=True)
-                    filtered_content = raw_response_content # Fallback
+                    # Keep raw_response_content as is if filtering fails
             # --- End Filtering ---
 
-            response = Response(filtered_content, resp.status_code, response_headers)
+            # --- Convert OpenAI response format (Streaming or Non-Streaming) ---
+            if is_openai_format and final_status_code == 200:
+                 try:
+                      logging.debug("Attempting to convert Gemini response to OpenAI format (Streaming or Non-Streaming).")
+                      # Use the potentially filtered raw_response_content here
+                      decoded_gemini_content = raw_response_content.decode('utf-8', errors='replace')
 
-            logging.debug(f"Response body size (after potential filtering): {len(filtered_content)} bytes")
-            # Log the full potentially filtered response body if debug level is enabled
-            if LOG_LEVEL == logging.DEBUG and filtered_content:
+                      # --- Streaming Conversion (from JSON Array) ---
+                      if use_stream_endpoint:
+                           def stream_converter_from_array():
+                                chunk_id_counter = 0
+                                created_timestamp = int(time.time())
+                                try:
+                                     gemini_response_array = json.loads(decoded_gemini_content)
+                                     if not isinstance(gemini_response_array, list):
+                                          logging.error("Gemini stream response was not a JSON array as expected.")
+                                          # Optionally yield an error chunk?
+                                          yield "data: [DONE]\n\n".encode('utf-8') # Send DONE anyway?
+                                          return
+
+                                     for gemini_chunk in gemini_response_array:
+                                          # Extract text content from Gemini chunk
+                                          text_content = ""
+                                          # Check for potential errors within the stream itself
+                                          if gemini_chunk.get("candidates") is None and gemini_chunk.get("error"):
+                                               logging.error(f"Error object found within Gemini response array: {gemini_chunk['error']}")
+                                               # Stop processing this stream
+                                               break
+
+                                          if gemini_chunk.get("candidates"):
+                                               content = gemini_chunk["candidates"][0].get("content", {})
+                                               if content.get("parts"):
+                                                    text_content = content["parts"][0].get("text", "")
+
+                                          if text_content: # Only yield if there's content
+                                               # Construct OpenAI SSE chunk
+                                               openai_chunk = {
+                                                    "id": f"chatcmpl-{uuid.uuid4()}",
+                                                    "object": "chat.completion.chunk",
+                                                    "created": created_timestamp,
+                                                    "model": target_gemini_model,
+                                                    "choices": [{
+                                                         "index": 0,
+                                                         "delta": { "content": text_content },
+                                                         "finish_reason": None
+                                                    }]
+                                               }
+                                               sse_data = f"data: {json.dumps(openai_chunk, ensure_ascii=False)}\n\n"
+                                               yield sse_data.encode('utf-8')
+                                               chunk_id_counter += 1
+
+                                except json.JSONDecodeError:
+                                     logging.error(f"Failed to decode Gemini response array: {decoded_gemini_content}")
+                                     # Optionally yield an error chunk?
+                                except Exception as e:
+                                     logging.error(f"Error processing Gemini response array: {e}", exc_info=True)
+
+                                # Send the final [DONE] signal
+                                yield "data: [DONE]\n\n".encode('utf-8')
+                                logging.info(f"Finished streaming conversion from array, sent {chunk_id_counter} content chunks.")
+
+                           # Set the response to use the generator and correct headers
+                           final_headers_to_client = [('Content-Type', 'text/event-stream'), ('Cache-Control', 'no-cache')] + [h for h in response_headers if h[0].lower() not in ['content-type', 'content-length', 'transfer-encoding']]
+                           # Return the generator directly
+                           return Response(stream_converter_from_array(), status=final_status_code, headers=final_headers_to_client)
+
+                      # --- Non-Streaming Conversion ---
+                      else:
+                           gemini_full_response = json.loads(decoded_gemini_content)
+                      # Extract text content (simplified)
+                      full_text = ""
+                      openai_finish_reason = "stop" # Default
+
+                      if gemini_full_response.get("candidates"):
+                           candidate = gemini_full_response["candidates"][0]
+                           full_text = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+                           # Map finish reason
+                           gemini_finish_reason = candidate.get("finishReason", "STOP")
+                           if gemini_finish_reason == "MAX_TOKENS":
+                                openai_finish_reason = "length"
+                           elif gemini_finish_reason == "SAFETY":
+                                openai_finish_reason = "content_filter"
+                           # Add other mappings if needed (RECITATION, OTHER)
+
+                      # Corrected structure for openai_response
+                      openai_response = {
+                          "id": f"chatcmpl-{uuid.uuid4()}",
+                          "object": "chat.completion",
+                          "created": int(time.time()),
+                          "model": target_gemini_model,
+                          "choices": [{
+                              "index": 0,
+                              "message": {
+                                  "role": "assistant",
+                                  "content": full_text,
+                              },
+                              "finish_reason": openai_finish_reason # Use mapped reason
+                          }],
+                          "usage": { # Map from Gemini usageMetadata
+                              "prompt_tokens": gemini_full_response.get("usageMetadata", {}).get("promptTokenCount", 0),
+                              "completion_tokens": gemini_full_response.get("usageMetadata", {}).get("candidatesTokenCount", 0),
+                              "total_tokens": gemini_full_response.get("usageMetadata", {}).get("totalTokenCount", 0)
+                          }
+                      }
+                      final_content_to_client = json.dumps(openai_response, ensure_ascii=False).encode('utf-8') # Use correct variable
+                      # Update headers for JSON
+                      final_headers_to_client = [('Content-Type', 'application/json')] + [h for h in response_headers if h[0].lower() not in ['content-type', 'content-length', 'transfer-encoding']]
+
+                      logging.info("Successfully converted non-streaming Gemini response to OpenAI format.")
+
+                 except Exception as convert_err:
+                      logging.error(f"Error converting Gemini response to OpenAI format: {convert_err}", exc_info=True)
+                      # Fallback: Return original Gemini content but maybe signal error?
+                      # For now, just return the filtered Gemini content with original headers/status
+                      final_content_to_client = raw_response_content # Use the (potentially filtered) raw content
+                      final_headers_to_client = response_headers
+                      # Consider changing status code? Maybe 500?
+                      # final_status_code = 500 # Indicate conversion failure
+
+            else:
+                 # Use the potentially filtered content directly for non-OpenAI requests or errors
+                 final_content_to_client = raw_response_content
+
+
+            # --- Create final response (only if not streaming OpenAI, which returns earlier) ---
+            response = Response(final_content_to_client, final_status_code, final_headers_to_client)
+
+            # Logging the final response size might be misleading for streams handled by the generator
+            if not (is_openai_format and use_stream_endpoint):
+                 logging.debug(f"Final response body size sent to client: {len(final_content_to_client)} bytes")
+            # Log the full final response body if debug level is enabled
+            if LOG_LEVEL == logging.DEBUG and final_content_to_client:
                 try:
                     # Attempt to decode for readability, log raw bytes on failure
-                    decoded_body = filtered_content.decode('utf-8', errors='replace')
+                    # Use final_content_to_client here
+                    decoded_body = final_content_to_client.decode('utf-8', errors='replace')
                     logging.debug(f"Full Response body sent to client (decoded): {decoded_body}")
                 except Exception as log_err:
-                    logging.debug(f"Could not decode filtered response body for logging, logging raw bytes: {filtered_content!r}. Error: {log_err}")
-            elif filtered_content: # Log first 500 chars if not in DEBUG mode but content exists
+                    # Log the correct variable in the error message too
+                    logging.debug(f"Could not decode final response body for logging, logging raw bytes: {final_content_to_client!r}. Error: {log_err}")
+            elif final_content_to_client: # Log first 500 chars if not in DEBUG mode but content exists
                  try:
-                      logging.info(f"Response body sent to client (first 500 chars): {filtered_content[:500].decode('utf-8', errors='ignore')}")
+                      logging.info(f"Response body sent to client (first 500 chars): {final_content_to_client[:500].decode('utf-8', errors='ignore')}")
                  except Exception:
-                      logging.info("Could not decode start of filtered response body for logging.")
+                      logging.info("Could not decode start of final response body for logging.")
 
 
             return response # Return the potentially filtered response
@@ -406,7 +701,7 @@ def proxy(path):
     # If the loop finishes without returning (meaning all keys were tried and failed or were exhausted)
     logging.error("Failed to forward request after trying all available API keys.")
     return Response("Proxy error: Failed to find a usable API key.", status=503, mimetype='text/plain') # Service Unavailable
-        
+
     # --- Request Forwarding --- (This section is now inside the loop)
     # Get the request body data once before the loop
     data = request.get_data()
@@ -422,10 +717,10 @@ if __name__ == '__main__':
     if api_keys:
         # Initialize the key cycler if keys were loaded successfully
         key_cycler = cycle(api_keys)
-        
+
         # Load usage data after keys are loaded but before starting server
-        load_usage_data() 
-        
+        load_usage_data()
+
         logging.info(f"Starting Gemini proxy server on http://{LISTEN_HOST}:{LISTEN_PORT}")
         logging.info(f"Proxy configured to use placeholder token: {PLACEHOLDER_TOKEN}")
         logging.info(f"Requests will be forwarded to: {GEMINI_API_BASE_URL}")

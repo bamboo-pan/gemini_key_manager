@@ -19,10 +19,37 @@
 *   **每日重置：** 在每个新的一天开始时自动重置使用计数和已耗尽密钥列表。
 *   **可配置日志记录：** 提供详细的日志记录到控制台和轮换日志文件，用于调试和监控。
 
-## 基本设置
+## 先决条件
 
-1.  在脚本所在的同一目录中创建一个名为 `key.txt` 的文件。
-2.  将您的 Google Gemini API 密钥添加到 `key.txt` 文件中，每行一个密钥。
-3.  在脚本中配置 `PLACEHOLDER_GEMINI_TOKEN`（可选，但建议）。
-4.  运行脚本：`python gemini_key_manager.py`
-5.  配置您的客户端应用程序，将请求发送到 `http://<proxy_server_ip>:5000`，并在 `x-goog-api-key` 标头中使用 `PLACEHOLDER_GEMINI_TOKEN`。
+*   **Python:** 推荐使用 Python 3.7 或更高版本。
+
+## 安装
+
+1.  **克隆仓库：**
+    ```bash
+    git clone https://github.com/bamboo-pan/gemini_key_manager.git
+    cd gemini_key_manager
+    ```
+2.  **安装依赖：**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *或者，如果您不想克隆仓库，请确保已安装 `requests` 和 `flask` (`pip install requests flask`)。*
+
+## 配置与使用
+
+1.  **创建密钥文件：** 在项目目录中创建一个名为 `key.txt` 的文件。
+2.  **添加 API 密钥：** 将您的 Google Gemini API 密钥添加到 `key.txt` 文件中，每行放置一个密钥。
+3.  **配置占位符（可选）：** 在 `gemini_key_manager.py` 脚本中检查并可选择地更改 `PLACEHOLDER_GEMINI_TOKEN` 的值。这是您的客户端将使用的令牌。
+4.  **运行代理服务器：**
+    ```bash
+    python gemini_key_manager.py
+    ```
+    默认情况下，服务器将在 `http://0.0.0.0:5000` 上开始监听。
+5.  **配置客户端：** 更新您的客户端应用程序（例如，其他脚本、服务），将其 Gemini API 请求发送到代理服务器的地址（`http://<proxy_server_ip>:5000`，将 `<proxy_server_ip>` 替换为实际 IP 地址，如果在同一台机器上运行则为 `localhost`）。确保客户端在 `x-goog-api-key` 标头中使用配置的 `PLACEHOLDER_GEMINI_TOKEN` 以便向代理进行身份验证。
+
+## 部署说明
+
+*   **WSGI 服务器：** 对于生产环境，强烈建议使用生产级的 WSGI 服务器（如 Gunicorn 或 Waitress）来运行 Flask 应用，而不是使用 Flask 内置的开发服务器 (`app.run()`)。
+    *   使用 Waitress 的示例：`pip install waitress` 然后 `waitress-serve --host 0.0.0.0 --port 5000 gemini_key_manager:app`
+*   **网络可访问性：** 默认配置 `LISTEN_HOST = "0.0.0.0"` 使代理服务器可以从您本地网络上的其他设备访问。请确保您的网络环境安全，或者如果您只需要从同一台机器访问，请将 `LISTEN_HOST` 更改为 `"127.0.0.1"` (localhost)。

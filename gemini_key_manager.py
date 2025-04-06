@@ -348,10 +348,8 @@ def proxy(path):
     return Response("Proxy error: Failed to find a usable API key.", status=503, mimetype='text/plain') # Service Unavailable
         
     # --- Request Forwarding --- (This section is now inside the loop)
-    # Get the request body data (Moved outside loop)
-    data = request.get_data() 
     # Get the request body data once before the loop
-    data = request.get_data() 
+    data = request.get_data()
 
 
 # --- Main Execution ---

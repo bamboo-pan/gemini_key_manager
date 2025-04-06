@@ -19,10 +19,37 @@ This is particularly useful when you have multiple API keys and want to distribu
 *   **Daily Reset:** Automatically resets usage counts and the list of exhausted keys at the beginning of each new day.
 *   **Configurable Logging:** Provides detailed logging to both console and rotating log files for debugging and monitoring.
 
-## Basic Setup
+## Prerequisites
 
-1.  Create a file named `key.txt` in the same directory as the script.
-2.  Add your Google Gemini API keys to `key.txt`, one key per line.
-3.  Configure the `PLACEHOLDER_GEMINI_TOKEN` in the script (optional, but recommended).
-4.  Run the script: `python gemini_key_manager.py`
-5.  Configure your client applications to send requests to `http://<proxy_server_ip>:5000` and use the `PLACEHOLDER_GEMINI_TOKEN` in the `x-goog-api-key` header.
+*   **Python:** Version 3.7 or higher is recommended.
+
+## Installation
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/bamboo-pan/gemini_key_manager.git
+    cd gemini_key_manager
+    ```
+2.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    *Alternatively, if you prefer not to clone, ensure you have `requests` and `flask` installed (`pip install requests flask`).*
+
+## Configuration and Usage
+
+1.  **Create Key File:** Create a file named `key.txt` in the project directory.
+2.  **Add API Keys:** Add your Google Gemini API keys to `key.txt`, placing one key per line.
+3.  **Configure Placeholder (Optional):** Review and optionally change the `PLACEHOLDER_GEMINI_TOKEN` value within the `gemini_key_manager.py` script. This is the token your clients will use.
+4.  **Run the Proxy Server:**
+    ```bash
+    python gemini_key_manager.py
+    ```
+    The server will start listening on `http://0.0.0.0:5000` by default.
+5.  **Configure Clients:** Update your client applications (e.g., other scripts, services) to send their Gemini API requests to the proxy server's address (`http://<proxy_server_ip>:5000`, replacing `<proxy_server_ip>` with the actual IP address or `localhost` if running on the same machine). Ensure clients use the configured `PLACEHOLDER_GEMINI_TOKEN` in the `x-goog-api-key` header for authentication against the proxy.
+
+## Deployment Note
+
+*   **WSGI Server:** For production environments, it is strongly recommended to run the Flask application using a production-grade WSGI server like Gunicorn or Waitress instead of the built-in Flask development server (`app.run()`).
+    *   Example using Waitress: `pip install waitress` then `waitress-serve --host 0.0.0.0 --port 5000 gemini_key_manager:app`
+*   **Network Accessibility:** The default configuration `LISTEN_HOST = "0.0.0.0"` makes the proxy server accessible from other devices on your local network. Ensure your network environment is secure or change `LISTEN_HOST` to `"127.0.0.1"` (localhost) if you only need to access it from the same machine.

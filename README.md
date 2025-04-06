@@ -17,6 +17,7 @@ This is particularly useful when you have multiple API keys and want to distribu
     *   Automatically retries the request with the next available key in the pool.
     *   Returns a 503 "Service Unavailable" error if all keys become exhausted for the day.
 *   **Daily Reset:** Automatically resets usage counts and the list of exhausted keys at the beginning of each new day.
+*   **OpenAI API Compatibility:** Acts as an adapter for the `/v1/chat/completions` endpoint. Accepts requests in OpenAI format (including streaming) and translates them to/from the Gemini API format.
 *   **Configurable Logging:** Provides detailed logging to both console and rotating log files for debugging and monitoring.
 
 ## Prerequisites
@@ -46,7 +47,9 @@ This is particularly useful when you have multiple API keys and want to distribu
     python gemini_key_manager.py
     ```
     The server will start listening on `http://0.0.0.0:5000` by default.
-5.  **Configure Clients:** Update your client applications (e.g., other scripts, services) to send their Gemini API requests to the proxy server's address (`http://<proxy_server_ip>:5000`, replacing `<proxy_server_ip>` with the actual IP address or `localhost` if running on the same machine). Ensure clients use the configured `PLACEHOLDER_GEMINI_TOKEN` in the `x-goog-api-key` header for authentication against the proxy.
+5.  **Configure Clients:**
+    *   **For Direct Gemini API Usage:** Update your client applications to send requests to the proxy server's address (`http://<proxy_server_ip>:5000/<gemini_path>`, e.g., `http://localhost:5000/v1beta/models/gemini-pro:generateContent`). Ensure clients use the configured `PLACEHOLDER_GEMINI_TOKEN` in the `x-goog-api-key` header for authentication against the proxy.
+    *   **For OpenAI API Compatibility:** Configure your client (like CherryStudio, etc.) to use the proxy server's address as the base URL and target the `/v1/chat/completions` endpoint (e.g., `http://localhost:5000/v1/chat/completions`). The client should use the `PLACEHOLDER_GEMINI_TOKEN` as the API Key (typically sent as a Bearer token in the `Authorization` header). The proxy will handle the translation to and from the Gemini API.
 
 ## Deployment Note
 

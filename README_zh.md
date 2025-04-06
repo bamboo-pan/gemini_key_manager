@@ -17,6 +17,7 @@
     *   使用密钥池中的下一个可用密钥自动重试请求。
     *   如果当天所有密钥都已耗尽，则返回 503 "Service Unavailable" 错误。
 *   **每日重置：** 在每个新的一天开始时自动重置使用计数和已耗尽密钥列表。
+*   **OpenAI API 兼容性：** 可作为 `/v1/chat/completions` 端点的适配器。接受 OpenAI 格式的请求（包括流式传输），并将其与 Gemini API 格式进行相互转换。
 *   **可配置日志记录：** 提供详细的日志记录到控制台和轮换日志文件，用于调试和监控。
 
 ## 先决条件
@@ -46,7 +47,9 @@
     python gemini_key_manager.py
     ```
     默认情况下，服务器将在 `http://0.0.0.0:5000` 上开始监听。
-5.  **配置客户端：** 更新您的客户端应用程序（例如，其他脚本、服务），将其 Gemini API 请求发送到代理服务器的地址（`http://<proxy_server_ip>:5000`，将 `<proxy_server_ip>` 替换为实际 IP 地址，如果在同一台机器上运行则为 `localhost`）。确保客户端在 `x-goog-api-key` 标头中使用配置的 `PLACEHOLDER_GEMINI_TOKEN` 以便向代理进行身份验证。
+5.  **配置客户端：**
+    *   **对于直接 Gemini API 调用：** 更新您的客户端应用程序，将请求发送到代理服务器的地址 (`http://<proxy_server_ip>:5000/<gemini_path>`，例如 `http://localhost:5000/v1beta/models/gemini-pro:generateContent`)。确保客户端在 `x-goog-api-key` 标头中使用配置的 `PLACEHOLDER_GEMINI_TOKEN` 以便向代理进行身份验证。
+    *   **对于 OpenAI API 兼容模式：** 配置您的客户端（如 CherryStudio 等）使用代理服务器的地址作为基础 URL，并指向 `/v1/chat/completions` 端点（例如 `http://localhost:5000/v1/chat/completions`）。客户端应使用 `PLACEHOLDER_GEMINI_TOKEN` 作为 API 密钥（通常在 `Authorization` 标头中作为 Bearer 令牌发送）。代理将处理与 Gemini API 之间的格式转换。
 
 ## 部署说明
 

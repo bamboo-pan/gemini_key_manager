@@ -314,17 +314,77 @@ def proxy(path):
             ]
             logging.debug(f"Forwarding response headers to client: {response_headers}")
 
-            response_content = resp.content 
-            response = Response(response_content, resp.status_code, response_headers)
-            
-            logging.debug(f"Response body size: {len(response_content)} bytes")
-            if LOG_LEVEL == logging.DEBUG and response_content:
+            # Read the raw content first
+            raw_response_content = resp.content
+            filtered_content = raw_response_content # Default to original content
+
+            # --- Attempt to filter out trailing Google API error JSON (Revised Approach) ---
+            if resp.status_code == 200 and raw_response_content:
                 try:
-                    logging.debug(f"Response body (first 500 chars): {response_content[:500].decode('utf-8', errors='ignore')}")
-                except Exception:
-                    logging.debug("Could not decode response body for logging.")
-                    
-            return response # Success or non-429 error, return response
+                    # Decode the whole content
+                    decoded_content = raw_response_content.decode('utf-8', errors='replace').strip()
+
+                    # Check if it potentially ends with a JSON object
+                    if decoded_content.endswith('}'):
+                        # Find the start of the last potential JSON object (look for the last '{' preceded by a newline)
+                        # This is heuristic, assuming the error JSON is the last significant block.
+                        last_block_start = decoded_content.rfind('\n{') # Find last occurrence
+                        if last_block_start == -1:
+                             last_block_start = decoded_content.rfind('\n\n{') # Try double newline just in case
+
+                        if last_block_start != -1:
+                            potential_error_json_str = decoded_content[last_block_start:].strip()
+                            try:
+                                error_json = json.loads(potential_error_json_str)
+                                # Check if it matches the Google error structure
+                                if isinstance(error_json, dict) and 'error' in error_json and isinstance(error_json['error'], dict) and 'code' in error_json['error'] and 'status' in error_json['error']:
+                                    logging.warning(f"Detected and filtering out trailing Google API error JSON: {potential_error_json_str}")
+                                    # Truncate the content *before* the start of this detected error block
+                                    valid_content = decoded_content[:last_block_start].strip()
+                                    # Add back trailing newline(s) if content existed before the error
+                                    if valid_content:
+                                         # Preserve double newline if it was there before the error block
+                                         if decoded_content[last_block_start-1:last_block_start+1] == '\n\n{':
+                                              valid_content += '\n\n'
+                                         else:
+                                              valid_content += '\n' # Add single newline otherwise? Or maybe none? Let's stick with double for SSE consistency if possible. Add double.
+                                         valid_content += '\n\n'
+
+
+                                    filtered_content = valid_content.encode('utf-8')
+                                else:
+                                    logging.debug("Potential JSON at end doesn't match Google error structure.")
+                            except json.JSONDecodeError:
+                                logging.debug("String at end ending with '}' is not valid JSON.")
+                        else:
+                             logging.debug("Could not find a potential start ('\\n{') for a JSON block at the end.")
+                    else:
+                        logging.debug("Content does not end with '}'.")
+
+                except Exception as filter_err:
+                    logging.error(f"Error occurred during revised response filtering: {filter_err}", exc_info=True)
+                    filtered_content = raw_response_content # Fallback
+            # --- End Filtering ---
+
+            response = Response(filtered_content, resp.status_code, response_headers)
+
+            logging.debug(f"Response body size (after potential filtering): {len(filtered_content)} bytes")
+            # Log the full potentially filtered response body if debug level is enabled
+            if LOG_LEVEL == logging.DEBUG and filtered_content:
+                try:
+                    # Attempt to decode for readability, log raw bytes on failure
+                    decoded_body = filtered_content.decode('utf-8', errors='replace')
+                    logging.debug(f"Full Response body sent to client (decoded): {decoded_body}")
+                except Exception as log_err:
+                    logging.debug(f"Could not decode filtered response body for logging, logging raw bytes: {filtered_content!r}. Error: {log_err}")
+            elif filtered_content: # Log first 500 chars if not in DEBUG mode but content exists
+                 try:
+                      logging.info(f"Response body sent to client (first 500 chars): {filtered_content[:500].decode('utf-8', errors='ignore')}")
+                 except Exception:
+                      logging.info("Could not decode start of filtered response body for logging.")
+
+
+            return response # Return the potentially filtered response
 
         except requests.exceptions.Timeout:
             logging.error(f"Timeout error when forwarding request to {target_url} with key ...{next_key[-4:]}")

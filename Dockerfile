@@ -9,7 +9,7 @@ COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 # Also install waitress for running the Flask app in production
-RUN pip install --no-cache-dir -r requirements.txt waitress
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt waitress
 
 # Copy the rest of the application code into the container at /app
 # key.txt will be mounted as a volume at runtime

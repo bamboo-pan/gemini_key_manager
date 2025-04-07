@@ -22,7 +22,7 @@ GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 5000
 # Log file configuration
-LOG_FILENAME = "proxy_debug.log"
+LOG_DIRECTORY = "/app/logs" # Changed from LOG_FILENAME
 LOG_LEVEL = logging.DEBUG # Set to logging.INFO for less verbose logging
 # --- End Configuration ---
 
@@ -47,21 +47,28 @@ def setup_logging():
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
     log_level = LOG_LEVEL
 
+    # Ensure the log directory exists inside the container
+    try:
+        os.makedirs(LOG_DIRECTORY, exist_ok=True)
+    except OSError as e:
+        print(f"Error creating log directory {LOG_DIRECTORY}: {e}", file=sys.stderr)
+        # Optionally handle this more gracefully, maybe fall back to CWD?
+
     # Generate timestamp for log filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Construct filename with timestamp (e.g., proxy_debug_20250406_155700.log)
-    log_filename_with_ts = f"proxy_debug_{timestamp}.log"
+    # Construct filename with timestamp inside the log directory
+    log_filename_with_ts = os.path.join(LOG_DIRECTORY, f"proxy_debug_{timestamp}.log")
 
     # File Handler (Rotates log file)
     # Rotates when the log reaches 1MB, keeps 3 backup logs
     try:
-        # Use the filename with timestamp
+        # Use the full path with timestamp
         file_handler = logging.handlers.RotatingFileHandler(
             log_filename_with_ts, maxBytes=1*1024*1024, backupCount=3, encoding='utf-8')
         file_handler.setFormatter(log_formatter)
         file_handler.setLevel(log_level)
     except Exception as e:
-        print(f"Error setting up file logger for {LOG_FILENAME}: {e}", file=sys.stderr)
+        print(f"Error setting up file logger for {log_filename_with_ts}: {e}", file=sys.stderr)
         file_handler = None
 
     # Console Handler

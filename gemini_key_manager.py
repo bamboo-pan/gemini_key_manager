@@ -220,8 +220,21 @@ def convert_openai_to_gemini_request(openai_data):
 
         # Ensure content is in the correct parts format
         if isinstance(content, str):
+            # Simple string content
             gemini_contents.append({"role": gemini_role, "parts": [{"text": content}]})
-        # TODO: Handle more complex content types if needed (e.g., images)
+        elif isinstance(content, list):
+            # Handle list of parts (like from multimodal requests or specific clients)
+            combined_text = ""
+            # TODO: Handle non-text parts if necessary (e.g., images)
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    combined_text += part.get("text", "")
+            if combined_text: # Only add if we extracted some text
+                 gemini_contents.append({"role": gemini_role, "parts": [{"text": combined_text}]})
+            else:
+                 logging.warning(f"Message with role '{role}' had list content, but no text parts found: {content}")
+        else:
+             logging.warning(f"Unsupported content type for role '{role}': {type(content)}")
 
     # Add system prompt if found (Gemini prefers it at the start or via systemInstruction)
     # Let's try adding it via systemInstruction if present

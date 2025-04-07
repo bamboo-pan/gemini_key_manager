@@ -17,7 +17,7 @@
     *   使用密钥池中的下一个可用密钥自动重试请求。
     *   如果当天所有密钥都已耗尽，则返回 503 "Service Unavailable" 错误。
 *   **每日重置：** 在每个新的一天开始时自动重置使用计数和已耗尽密钥列表。
-*   **OpenAI API 兼容性：** 可作为 `/v1/chat/completions` 端点的适配器。接受 OpenAI 格式的请求（包括流式传输），并将其与 Gemini API 格式进行相互转换。
+*   **OpenAI API 兼容性：** 可作为 `/v1/chat/completions` 端点的适配器。接受 OpenAI 格式的请求（包括流式传输），并将其与 Gemini API 格式进行相互转换。经 CherryStudio 和 Cline 测试通过。
 *   **可配置日志记录：** 提供详细的日志记录到控制台和轮换日志文件，用于调试和监控。
 
 ## 先决条件

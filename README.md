@@ -17,7 +17,7 @@ This is particularly useful when you have multiple API keys and want to distribu
     *   Automatically retries the request with the next available key in the pool.
     *   Returns a 503 "Service Unavailable" error if all keys become exhausted for the day.
 *   **Daily Reset:** Automatically resets usage counts and the list of exhausted keys at the beginning of each new day.
-*   **OpenAI API Compatibility:** Acts as an adapter for the `/v1/chat/completions` endpoint. Accepts requests in OpenAI format (including streaming) and translates them to/from the Gemini API format.
+*   **OpenAI API Compatibility:** Acts as an adapter for the `/v1/chat/completions` endpoint. Accepts requests in OpenAI format (including streaming) and translates them to/from the Gemini API format. Tested with CherryStudio and Cline.
 *   **Configurable Logging:** Provides detailed logging to both console and rotating log files for debugging and monitoring.
 
 ## Prerequisites

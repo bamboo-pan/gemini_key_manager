@@ -8,8 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-# Also install waitress for running the Flask app in production
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt waitress
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
 # Copy the rest of the application code into the container at /app
 # key.txt will be mounted as a volume at runtime
@@ -23,6 +22,6 @@ EXPOSE 5000
 # Define environment variable (optional, can be overridden)
 # ENV NAME World
 
-# Run gemini_key_manager.py when the container launches using waitress
+# Run gemini_key_manager.py when the container launches using the built-in Flask server
 # Use 0.0.0.0 to listen on all interfaces within the container
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "gemini_key_manager:app"]
+CMD ["python", "gemini_key_manager.py"]

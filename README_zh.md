@@ -18,7 +18,7 @@
     *   如果当天所有密钥都已耗尽，则返回 503 "Service Unavailable" 错误。
 *   **每日重置：** 在每个新的一天开始时自动重置使用计数和已耗尽密钥列表。
 *   **OpenAI API 兼容性：** 可作为 `/v1/chat/completions` 端点的适配器。接受 OpenAI 格式的请求（包括流式传输），并将其与 Gemini API 格式进行相互转换。经 CherryStudio 和 Cline 测试通过。
-*   **可配置日志记录：** 提供详细的日志记录到控制台和轮换日志文件，用于调试和监控。
+*   **可配置日志记录：** 提供详细的日志记录到控制台和轮换日志文件（默认写入当前工作目录），用于调试和监控。
 
 ## 先决条件
 
@@ -53,8 +53,7 @@
 
 ## 部署说明
 
-*   **WSGI 服务器：** 对于生产环境，强烈建议使用生产级的 WSGI 服务器（如 Gunicorn 或 Waitress）来运行 Flask 应用，而不是使用 Flask 内置的开发服务器 (`app.run()`)。
-    *   使用 Waitress 的示例：`pip install waitress` 然后 `waitress-serve --host 0.0.0.0 --port 5000 gemini_key_manager:app`
+*   **生产环境考虑：** Flask 内置的开发服务器 (`app.run()`) 主要用于开发和测试。对于生产环境，通常建议使用更健壮的 WSGI 服务器（如 Gunicorn 或 uWSGI）来运行 Flask 应用以获得更好的性能和稳定性。如果您选择在生产环境中使用此代理，请考虑将其部署在生产级 WSGI 服务器后面。
 *   **网络可访问性：** 默认配置 `LISTEN_HOST = "0.0.0.0"` 使代理服务器可以从您本地网络上的其他设备访问。请确保您的网络环境安全，或者如果您只需要从同一台机器访问，请将 `LISTEN_HOST` 更改为 `"127.0.0.1"` (localhost)。
 
 ## 使用 Docker
@@ -90,14 +89,13 @@ docker pull bamboo2019/gemini-key-manager:latest # 或者指定特定 tag
 ```bash
 # 替换 <your_local_key_file_path> 为您本地 key.txt 文件的 **绝对路径** 或 **相对路径** (例如 ./key.txt)
 # 替换 <your_local_usage_data_file_path> 为您希望存储持久化数据的本地 **文件路径** (例如 ./key_usage.txt)
-# 替换 <your_local_log_dir> 为您希望存储日志文件的本地 **目录路径** (例如 ./logs)
 # 替换 <image_name> 为您构建的本地镜像名 (例如 gemini-key-manager) 或预构建镜像名 (例如 bamboo2019/gemini-key-manager:latest)
+# (可选) 如果您想持久化日志文件，可以添加 -v "<your_local_log_dir>:/app" 来挂载整个 /app 目录
 
 docker run -d \
   -p 5000:5000 \
   -v "<your_local_key_file_path>:/app/key.txt" \
   -v "<your_local_usage_data_file_path>:/app/key_usage.txt" \
-  -v "<your_local_log_dir>:/app/logs" \
   --name gemini-proxy \
   <image_name>
 ```
@@ -108,11 +106,11 @@ docker run -d \
 *   `-p 5000:5000`: 将主机的 5000 端口映射到容器的 5000 端口。
 *   `-v "<your_local_key_file_path>:/app/key.txt"`: **（必需）** 将您本地的 `key.txt` 文件挂载到容器内的 `/app/key.txt`。这是应用程序读取 API 密钥所必需的。请务必提供正确的本地文件路径。
 *   `-v "<your_local_usage_data_file_path>:/app/key_usage.txt"`: **（推荐）** 将您本地的一个 **文件** 挂载到容器内的 `/app/key_usage.txt`。这用于持久化存储密钥使用情况和已耗尽密钥列表，即使容器重启也能保留状态。请提供一个本地文件的完整路径（例如 `/path/to/my/usage_data.txt` 或 `c:\data\usage_data.txt`）。如果本地文件不存在，Docker 通常会自动创建它（但建议您先手动创建一个空文件）。
-*   `-v "<your_local_log_dir>:/app/logs"`: **（推荐）** 将本地 **目录** 挂载到容器内的 `/app/logs` 目录。这用于持久化存储应用程序日志文件，方便调试和监控。如果 `<your_local_log_dir>` 不存在，Docker 会创建它。
 *   `--name gemini-proxy`: 为容器指定一个易于识别的名称。
 *   `<image_name>`: 指定要使用的 Docker 镜像。
+*   **日志文件:** 日志文件（例如 `proxy_debug_YYYYMMDD_HHMMSS.log`）现在会直接写入脚本运行的当前工作目录。在 Docker 容器内，默认工作目录是 `/app`。如果您希望在容器外部访问或持久化这些日志，您可以选择性地将一个本地目录挂载到容器的 `/app` 目录（例如，添加 `-v "<your_local_app_dir>:/app"`）。请注意，这样做会将整个 `/app` 目录（包括 Python 脚本）替换为本地目录的内容，因此请确保您的本地目录包含了运行所需的 `gemini_key_manager.py` 和 `requirements.txt`（如果需要重新构建依赖）。更简单的做法是使用 `docker logs gemini-proxy` 查看实时日志，或者使用 `docker cp gemini-proxy:/app/proxy_debug_....log .` 将特定日志文件复制出来。
 
 **重要提示：**
 
-*   请确保为 `-v` 参数提供的本地文件或目录路径是正确的。对于相对路径，它们是相对于您运行 `docker run` 命令的当前目录。
-*   挂载 `key_usage.txt` 文件和 `logs` 目录对于在容器重启或更新后保留状态和历史记录非常重要。
+*   请确保为 `-v` 参数提供的本地文件路径是正确的。对于相对路径，它们是相对于您运行 `docker run` 命令的当前目录。
+*   挂载 `key_usage.txt` 文件对于在容器重启或更新后保留状态非常重要。日志文件默认存储在容器内部（`/app` 目录）。

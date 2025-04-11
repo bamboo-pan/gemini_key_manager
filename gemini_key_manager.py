@@ -22,7 +22,7 @@ GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 LISTEN_HOST = "0.0.0.0"
 LISTEN_PORT = 5000
 # Log file configuration
-LOG_DIRECTORY = "/app/logs" # Changed from LOG_FILENAME
+LOG_DIRECTORY = "." # Log files will be created in the current working directory
 LOG_LEVEL = logging.DEBUG # Set to logging.INFO for less verbose logging
 # --- End Configuration ---
 
@@ -47,16 +47,13 @@ def setup_logging():
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
     log_level = LOG_LEVEL
 
-    # Ensure the log directory exists inside the container
-    try:
-        os.makedirs(LOG_DIRECTORY, exist_ok=True)
-    except OSError as e:
-        print(f"Error creating log directory {LOG_DIRECTORY}: {e}", file=sys.stderr)
-        # Optionally handle this more gracefully, maybe fall back to CWD?
+    # Log directory is now '.', the current working directory.
+    # Ensure it exists if it's different from the script's location, though usually it's the same.
+    # os.makedirs(LOG_DIRECTORY, exist_ok=True) # Generally not needed for '.'
 
     # Generate timestamp for log filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Construct filename with timestamp inside the log directory
+    # Construct filename with timestamp directly in the LOG_DIRECTORY (/app)
     log_filename_with_ts = os.path.join(LOG_DIRECTORY, f"proxy_debug_{timestamp}.log")
 
     # File Handler (Rotates log file)

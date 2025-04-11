@@ -94,9 +94,9 @@ def load_usage_data(filename=USAGE_DATA_FILE):
     today_str = date.today().isoformat()
     current_usage_date = date.today() # Ensure current_usage_date is set
 
-    script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
-    filepath = os.path.join(script_dir, filename)
-    logging.info(f"Attempting to load usage data for {today_str} from: {filepath}")
+    # Use the filename directly, assuming it's relative to the current working directory
+    filepath = filename # e.g., "key_usage.txt"
+    logging.info(f"Attempting to load usage data for {today_str} from: {filepath} (relative to CWD: {os.getcwd()})")
 
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -137,8 +137,8 @@ def save_usage_data(filename=USAGE_DATA_FILE):
         "exhausted_keys": list(exhausted_keys_today) # Convert set to list for JSON
     }
 
-    script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
-    filepath = os.path.join(script_dir, filename)
+    # Use the filename directly, assuming it's relative to the current working directory
+    filepath = filename # e.g., "key_usage.txt"
 
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -152,15 +152,15 @@ def load_api_keys(filename):
     """
     Loads API keys from a specified file (one key per line), stores them globally.
     Handles potential errors like file not found or empty file.
+    Assumes the file is in the current working directory (e.g., /app in Docker).
     Returns the list of keys or None if loading fails.
     """
     global all_api_keys # Ensure we modify the global list
     keys = []
-    # Construct the full path relative to the script's directory or CWD
-    script_dir = os.path.dirname(__file__) if '__file__' in globals() else '.'
-    filepath = os.path.join(script_dir, filename)
+    # Use the filename directly, assuming it's relative to the current working directory
+    filepath = filename # e.g., "key.txt" which resolves relative to CWD
 
-    logging.info(f"Attempting to load API keys from: {filepath}")
+    logging.info(f"Attempting to load API keys from: {filepath} (relative to CWD: {os.getcwd()})")
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             # Read non-empty lines and strip whitespace

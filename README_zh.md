@@ -56,3 +56,63 @@
 *   **WSGI 服务器：** 对于生产环境，强烈建议使用生产级的 WSGI 服务器（如 Gunicorn 或 Waitress）来运行 Flask 应用，而不是使用 Flask 内置的开发服务器 (`app.run()`)。
     *   使用 Waitress 的示例：`pip install waitress` 然后 `waitress-serve --host 0.0.0.0 --port 5000 gemini_key_manager:app`
 *   **网络可访问性：** 默认配置 `LISTEN_HOST = "0.0.0.0"` 使代理服务器可以从您本地网络上的其他设备访问。请确保您的网络环境安全，或者如果您只需要从同一台机器访问，请将 `LISTEN_HOST` 更改为 `"127.0.0.1"` (localhost)。
+
+## 使用 Docker
+
+您可以使用 Docker 来构建和运行此代理服务器，这可以简化部署和环境管理。
+
+### 构建本地镜像
+
+如果您想自己构建 Docker 镜像：
+
+1.  确保您已安装 Docker。
+2.  在项目根目录下（包含 `Dockerfile` 的目录）运行以下命令：
+    ```bash
+    docker build -t gemini-key-manager .
+    ```
+    这将使用当前目录下的 `Dockerfile` 构建一个名为 `gemini-key-manager` 的本地镜像。
+
+### 使用预构建镜像
+
+我们提供了一个预构建的 Docker 镜像，您可以直接使用：
+
+```bash
+docker pull bamboo2019/gemini-key-manager:latest # 或者指定特定 tag
+```
+*(请将 `latest` 替换为您需要的具体 tag)*
+
+### 运行 Docker 容器
+
+无论您是构建了本地镜像还是拉取了预构建镜像，运行容器的命令类似。**在运行之前，请确保您已经在本地创建了 `key.txt` 文件，并将您的 Gemini API 密钥放入其中。**
+
+以下是运行容器的示例命令：
+
+```bash
+# 替换 <your_local_key_file_path> 为您本地 key.txt 文件的 **绝对路径** 或 **相对路径** (例如 ./key.txt)
+# 替换 <your_local_usage_data_file_path> 为您希望存储持久化数据的本地 **文件路径** (例如 ./key_usage.txt)
+# 替换 <your_local_log_dir> 为您希望存储日志文件的本地 **目录路径** (例如 ./logs)
+# 替换 <image_name> 为您构建的本地镜像名 (例如 gemini-key-manager) 或预构建镜像名 (例如 bamboo2019/gemini-key-manager:latest)
+
+docker run -d \
+  -p 5000:5000 \
+  -v "<your_local_key_file_path>:/app/key.txt" \
+  -v "<your_local_usage_data_file_path>:/app/key_usage.txt" \
+  -v "<your_local_log_dir>:/app/logs" \
+  --name gemini-proxy \
+  <image_name>
+```
+
+**参数说明：**
+
+*   `-d`: 在后台（分离模式）运行容器。
+*   `-p 5000:5000`: 将主机的 5000 端口映射到容器的 5000 端口。
+*   `-v "<your_local_key_file_path>:/app/key.txt"`: **（必需）** 将您本地的 `key.txt` 文件挂载到容器内的 `/app/key.txt`。这是应用程序读取 API 密钥所必需的。请务必提供正确的本地文件路径。
+*   `-v "<your_local_usage_data_file_path>:/app/key_usage.txt"`: **（推荐）** 将您本地的一个 **文件** 挂载到容器内的 `/app/key_usage.txt`。这用于持久化存储密钥使用情况和已耗尽密钥列表，即使容器重启也能保留状态。请提供一个本地文件的完整路径（例如 `/path/to/my/usage_data.txt` 或 `c:\data\usage_data.txt`）。如果本地文件不存在，Docker 通常会自动创建它（但建议您先手动创建一个空文件）。
+*   `-v "<your_local_log_dir>:/app/logs"`: **（推荐）** 将本地 **目录** 挂载到容器内的 `/app/logs` 目录。这用于持久化存储应用程序日志文件，方便调试和监控。如果 `<your_local_log_dir>` 不存在，Docker 会创建它。
+*   `--name gemini-proxy`: 为容器指定一个易于识别的名称。
+*   `<image_name>`: 指定要使用的 Docker 镜像。
+
+**重要提示：**
+
+*   请确保为 `-v` 参数提供的本地文件或目录路径是正确的。对于相对路径，它们是相对于您运行 `docker run` 命令的当前目录。
+*   挂载 `key_usage.txt` 文件和 `logs` 目录对于在容器重启或更新后保留状态和历史记录非常重要。

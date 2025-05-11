@@ -33,6 +33,8 @@ key_cycler = None
 all_api_keys = []
 # Dictionary to store API key usage counts for the current day
 key_usage_counts = {}
+# Dictionary to store API key usage counts per model for the current day
+model_usage_counts = {}
 # Set to store keys that hit the 429 limit today
 exhausted_keys_today = set()
 # Track the date for which the counts and exhausted list are valid
@@ -86,8 +88,8 @@ def setup_logging():
 
 # --- Usage Data Handling ---
 def load_usage_data(filename=USAGE_DATA_FILE):
-    """Loads usage data (counts and exhausted keys) from the specified file for today's date."""
-    global key_usage_counts, current_usage_date, exhausted_keys_today
+    """Loads usage data (counts, model counts, and exhausted keys) from the specified file for today's date."""
+    global key_usage_counts, model_usage_counts, current_usage_date, exhausted_keys_today
     today_str = date.today().isoformat()
     current_usage_date = date.today() # Ensure current_usage_date is set
 
@@ -101,36 +103,43 @@ def load_usage_data(filename=USAGE_DATA_FILE):
 
         if data.get("date") == today_str:
             key_usage_counts = data.get("counts", {})
+            model_usage_counts = data.get("model_counts", {}) # Load model counts
             # Load exhausted keys as a set
             exhausted_keys_today = set(data.get("exhausted_keys", []))
             logging.info(f"Successfully loaded usage data for {today_str}.")
-            logging.info(f"  Counts: {key_usage_counts}")
+            logging.info(f"  Total Counts: {key_usage_counts}")
+            logging.info(f"  Model Counts: {model_usage_counts}")
             logging.info(f"  Exhausted keys today: {exhausted_keys_today}")
         else:
-            logging.info(f"Usage data in {filepath} is for a previous date ({data.get('date')}). Starting fresh counts and exhausted list for {today_str}.")
+            logging.info(f"Usage data in {filepath} is for a previous date ({data.get('date')}). Starting fresh counts, model counts, and exhausted list for {today_str}.")
             key_usage_counts = {} # Reset counts
+            model_usage_counts = {} # Reset model counts
             exhausted_keys_today = set() # Reset exhausted keys
 
     except FileNotFoundError:
-        logging.info(f"Usage data file not found: {filepath}. Starting with empty counts and exhausted list.")
+        logging.info(f"Usage data file not found: {filepath}. Starting with empty counts, model counts, and exhausted list.")
         key_usage_counts = {}
+        model_usage_counts = {}
         exhausted_keys_today = set()
     except json.JSONDecodeError:
-        logging.error(f"Error decoding JSON from usage data file: {filepath}. Starting with empty counts and exhausted list.")
+        logging.error(f"Error decoding JSON from usage data file: {filepath}. Starting with empty counts, model counts, and exhausted list.")
         key_usage_counts = {}
+        model_usage_counts = {}
         exhausted_keys_today = set()
     except Exception as e:
         logging.error(f"An error occurred while loading usage data from {filepath}: {e}", exc_info=True)
         key_usage_counts = {}
+        model_usage_counts = {}
         exhausted_keys_today = set()
 
 def save_usage_data(filename=USAGE_DATA_FILE):
-    """Saves the current usage data (date, counts, exhausted keys) to the specified file."""
-    global key_usage_counts, current_usage_date, exhausted_keys_today
+    """Saves the current usage data (date, counts, model counts, exhausted keys) to the specified file."""
+    global key_usage_counts, model_usage_counts, current_usage_date, exhausted_keys_today
     today_str = current_usage_date.isoformat() # Use the tracked date
     data_to_save = {
         "date": today_str,
         "counts": key_usage_counts,
+        "model_counts": model_usage_counts, # Save model counts
         "exhausted_keys": list(exhausted_keys_today) # Convert set to list for JSON
     }
 
@@ -292,7 +301,7 @@ def proxy(path):
     as exhausted for the day, forwards the request (potentially converting formats),
     and returns the response (potentially converting formats).
     """
-    global key_cycler, key_usage_counts, current_usage_date, exhausted_keys_today, all_api_keys
+    global key_cycler, key_usage_counts, model_usage_counts, current_usage_date, exhausted_keys_today, all_api_keys
 
     request_start_time = time.time()
     original_request_path = path
@@ -302,9 +311,10 @@ def proxy(path):
     # --- Daily Usage Reset Check ---
     today = date.today()
     if today != current_usage_date:
-        logging.info(f"Date changed from {current_usage_date} to {today}. Resetting daily usage counts and exhausted keys list.")
+        logging.info(f"Date changed from {current_usage_date} to {today}. Resetting daily usage counts, model counts, and exhausted keys list.")
         current_usage_date = today
         key_usage_counts = {}
+        model_usage_counts = {} # Reset model counts as well
         exhausted_keys_today = set() # Reset exhausted keys as well
         save_usage_data() # Save the reset state
 
@@ -483,10 +493,33 @@ def proxy(path):
 
             # --- Success or Other Error ---
             # Increment usage count ONLY if the request didn't result in 429
-            current_count = key_usage_counts.get(next_key, 0) + 1
-            key_usage_counts[next_key] = current_count
-            logging.info(f"Key ending ...{next_key[-4:]} used successfully. Today's usage count: {current_count}")
-            save_usage_data() # Save updated counts and potentially exhausted list (if changed by another thread/process, though unlikely here)
+            current_total_count = key_usage_counts.get(next_key, 0) + 1
+            key_usage_counts[next_key] = current_total_count
+
+            # Determine the model used for this request
+            actual_model_used = "unknown" # Default
+            if is_openai_format:
+                actual_model_used = target_gemini_model # This was set during conversion
+            else:
+                # Parse from target_path for direct Gemini requests
+                # target_path is like "v1beta/models/gemini-pro:generateContent"
+                try:
+                    parts = target_path.split('/')
+                    if len(parts) > 2 and parts[1] == 'models': # Check for "models" segment
+                        actual_model_used = parts[2].split(':')[0]
+                    else:
+                        logging.warning(f"Could not determine model from direct Gemini path: {target_path}")
+                except Exception as e:
+                    logging.warning(f"Error parsing model from direct Gemini path {target_path}: {e}")
+
+            # Update model-specific usage count
+            if next_key not in model_usage_counts:
+                model_usage_counts[next_key] = {}
+            current_model_count = model_usage_counts[next_key].get(actual_model_used, 0) + 1
+            model_usage_counts[next_key][actual_model_used] = current_model_count
+
+            logging.info(f"Key ending ...{next_key[-4:]} used for model '{actual_model_used}'. Today's model usage: {current_model_count}. Total usage for key: {current_total_count}")
+            save_usage_data() # Save updated counts, model counts, and potentially exhausted list
 
             # --- Response Handling ---
             logging.debug(f"Response Headers from Google: {dict(resp.headers)}")
